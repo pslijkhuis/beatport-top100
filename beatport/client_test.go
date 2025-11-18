@@ -62,7 +62,10 @@ func TestLogin(t *testing.T) {
 		}
 
 		var data map[string]string
-		json.NewDecoder(r.Body).Decode(&data)
+		if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
+			t.Errorf("Failed to decode request body: %v", err)
+			return
+		}
 		if data["username"] != "user" || data["password"] != "pass" {
 			t.Errorf("Invalid credentials: %v", data)
 		}
