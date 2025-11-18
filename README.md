@@ -1,6 +1,6 @@
 # Beatport Top 100 Fetcher
 
-A Go application that authenticates with Beatport (using the same method as `beets-beatport4`) and fetches the Top 100 tracks for a specified genre.
+A Go application that authenticates with Beatport and fetches the Top 100 tracks for a specified genre.
 
 ## Features
 
