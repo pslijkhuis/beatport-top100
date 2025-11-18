@@ -1,0 +1,9 @@
+# Binaries
+beatport-app
+main
+
+# Config
+config.json
+
+# OS specific
+.DS_Store
