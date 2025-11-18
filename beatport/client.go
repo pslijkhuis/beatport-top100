@@ -9,17 +9,20 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
+	"strings"
 )
 
 const (
-	APIBaseURL  = "https://api.beatport.com/v4"
-	AuthBaseURL = "https://api.beatport.com/v4/auth"
+	DefaultAPIBaseURL  = "https://api.beatport.com/v4"
+	DefaultAuthBaseURL = "https://api.beatport.com/v4/auth"
 )
 
 type Client struct {
 	HTTPClient *http.Client
 	Token      *OAuthToken
 	ClientID   string
+	BaseURL    string
+	AuthURL    string
 }
 
 func NewClient() (*Client, error) {
@@ -31,11 +34,13 @@ func NewClient() (*Client, error) {
 		HTTPClient: &http.Client{
 			Jar: jar,
 		},
+		BaseURL: DefaultAPIBaseURL,
+		AuthURL: DefaultAuthBaseURL,
 	}, nil
 }
 
 func (c *Client) FetchClientID() error {
-	resp, err := c.HTTPClient.Get("https://api.beatport.com/v4/docs/")
+	resp, err := c.HTTPClient.Get(c.BaseURL + "/docs/")
 	if err != nil {
 		return err
 	}
@@ -51,7 +56,27 @@ func (c *Client) FetchClientID() error {
 	matches := reScript.FindAllStringSubmatch(string(body), -1)
 
 	for _, match := range matches {
-		scriptURL := "https://api.beatport.com" + match[1]
+		// Handle relative URLs correctly if we are mocking
+		scriptURL := match[1]
+		if !strings.HasPrefix(scriptURL, "http") {
+			// If BaseURL is the real one, we might need to be careful,
+			// but usually the script src is relative path.
+			// In the original code it was hardcoded https://api.beatport.com
+			// For testing, we want it to be c.BaseURL (or root of server)
+			// The regex captures /static/..., so we can append to a base.
+			// However, the original code did: "https://api.beatport.com" + match[1]
+			// Let's use a helper or just assume BaseURL root.
+			// For the real API, BaseURL is .../v4, but the script is at root /static.
+			// So we need the host.
+
+			u, err := url.Parse(c.BaseURL)
+			if err == nil {
+				scriptURL = fmt.Sprintf("%s://%s%s", u.Scheme, u.Host, match[1])
+			} else {
+				scriptURL = "https://api.beatport.com" + match[1]
+			}
+		}
+
 		scriptResp, err := c.HTTPClient.Get(scriptURL)
 		if err != nil {
 			continue
@@ -76,7 +101,7 @@ func (c *Client) FetchClientID() error {
 }
 
 func (c *Client) Login(username, password string) error {
-	loginURL := AuthBaseURL + "/login/"
+	loginURL := c.AuthURL + "/login/"
 	data := map[string]string{
 		"username": username,
 		"password": password,
@@ -111,13 +136,13 @@ func (c *Client) Authorize() (string, error) {
 		}
 	}
 
-	redirectURI := AuthBaseURL + "/o/post-message/"
+	redirectURI := c.AuthURL + "/o/post-message/"
 	params := url.Values{}
 	params.Set("response_type", "code")
 	params.Set("client_id", c.ClientID)
 	params.Set("redirect_uri", redirectURI)
 
-	authURL := AuthBaseURL + "/o/authorize/?" + params.Encode()
+	authURL := c.AuthURL + "/o/authorize/?" + params.Encode()
 
 	// We need to prevent redirects to capture the Location header
 	c.HTTPClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
@@ -152,8 +177,8 @@ func (c *Client) Authorize() (string, error) {
 }
 
 func (c *Client) GetToken(code string) error {
-	tokenURL := AuthBaseURL + "/o/token/"
-	redirectURI := AuthBaseURL + "/o/post-message/"
+	tokenURL := c.AuthURL + "/o/token/"
+	redirectURI := c.AuthURL + "/o/post-message/"
 
 	data := url.Values{}
 	data.Set("code", code)
@@ -182,7 +207,7 @@ func (c *Client) GetToken(code string) error {
 }
 
 func (c *Client) GetGenres() ([]Genre, error) {
-	url := APIBaseURL + "/catalog/genres/?per_page=100"
+	url := c.BaseURL + "/catalog/genres/?per_page=100"
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -210,7 +235,7 @@ func (c *Client) GetGenres() ([]Genre, error) {
 
 func (c *Client) GetTop100(genreID int) ([]Track, error) {
 	// Try the standard top 100 endpoint first
-	url := fmt.Sprintf("%s/catalog/genres/%d/top/100?per_page=100", APIBaseURL, genreID)
+	url := fmt.Sprintf("%s/catalog/genres/%d/top/100?per_page=100", c.BaseURL, genreID)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -233,7 +258,7 @@ func (c *Client) GetTop100(genreID int) ([]Track, error) {
 
 	// Fallback to search if the specific endpoint fails (e.g. 404)
 	// Note: This is a heuristic fallback.
-	searchURL := fmt.Sprintf("%s/catalog/search?q=genre_id:%d&per_page=100&type=tracks", APIBaseURL, genreID)
+	searchURL := fmt.Sprintf("%s/catalog/search?q=genre_id:%d&per_page=100&type=tracks", c.BaseURL, genreID)
 	req, err = http.NewRequest("GET", searchURL, nil)
 	if err != nil {
 		return nil, err
