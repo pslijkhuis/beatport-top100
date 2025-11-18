@@ -58,7 +58,7 @@ func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
 			return resp, nil
 		}
 		if resp != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 	}
 	return resp, err
@@ -135,22 +135,23 @@ func (c *Client) FetchClientID() error {
 			}
 		}
 
-		scriptResp, err := c.HTTPClient.Get(scriptURL)
+		reqScript, _ := http.NewRequest("GET", scriptURL, nil)
+		scriptResp, err := c.doRequest(reqScript)
 		if err != nil {
 			continue
 		}
 		defer scriptResp.Body.Close()
 
-		scriptBody, err := io.ReadAll(scriptResp.Body)
+		jsBody, err := io.ReadAll(scriptResp.Body)
 		if err != nil {
 			continue
 		}
 
 		// Find client_id
-		reClientID := regexp.MustCompile(`API_CLIENT_ID:\s*['"](.*?)['"]`)
-		clientMatch := reClientID.FindStringSubmatch(string(scriptBody))
-		if len(clientMatch) > 1 {
-			c.ClientID = clientMatch[1]
+		reClientID := regexp.MustCompile(`API_CLIENT_ID: \'(.*)\'`)
+		clientMatches := reClientID.FindAllStringSubmatch(string(jsBody), -1)
+		if len(clientMatches) > 0 {
+			c.ClientID = clientMatches[0][1]
 			return nil
 		}
 	}
@@ -159,6 +160,13 @@ func (c *Client) FetchClientID() error {
 }
 
 func (c *Client) Login(username, password string) error {
+	// Try loading token first
+	if err := c.LoadToken(); err == nil {
+		// Validate token (optional, but good practice)
+		// For now, we assume it's valid or will fail later
+		return nil
+	}
+
 	loginURL := c.AuthURL + "/login/"
 	data := map[string]string{
 		"username": username,
@@ -169,7 +177,13 @@ func (c *Client) Login(username, password string) error {
 		return err
 	}
 
-	resp, err := c.HTTPClient.Post(loginURL, "application/json", bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", loginURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return err
 	}
@@ -188,6 +202,11 @@ func (c *Client) Login(username, password string) error {
 }
 
 func (c *Client) Authorize() (string, error) {
+	// If we already have a token, skip authorization
+	if c.Token != nil {
+		return "", nil
+	}
+
 	if c.ClientID == "" {
 		if err := c.FetchClientID(); err != nil {
 			return "", err
@@ -208,7 +227,12 @@ func (c *Client) Authorize() (string, error) {
 	}
 	defer func() { c.HTTPClient.CheckRedirect = nil }()
 
-	resp, err := c.HTTPClient.Get(authURL)
+	req, err := http.NewRequest("GET", authURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return "", err
 	}
@@ -235,6 +259,10 @@ func (c *Client) Authorize() (string, error) {
 }
 
 func (c *Client) GetToken(code string) error {
+	if c.Token != nil {
+		return nil
+	}
+
 	tokenURL := c.AuthURL + "/o/token/"
 	redirectURI := c.AuthURL + "/o/post-message/"
 
@@ -244,7 +272,15 @@ func (c *Client) GetToken(code string) error {
 	data.Set("redirect_uri", redirectURI)
 	data.Set("client_id", c.ClientID)
 
-	resp, err := c.HTTPClient.PostForm(tokenURL, data)
+	// PostForm uses Client.PostForm which doesn't use our doRequest wrapper easily
+	// Let's construct a request
+	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return err
 	}
@@ -261,7 +297,7 @@ func (c *Client) GetToken(code string) error {
 	}
 
 	c.Token = &token
-	return nil
+	return c.SaveToken()
 }
 
 func (c *Client) GetGenres() ([]Genre, error) {
@@ -272,7 +308,7 @@ func (c *Client) GetGenres() ([]Genre, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token.AccessToken)
 
-	resp, err := c.HTTPClient.Do(req)
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +336,7 @@ func (c *Client) GetTop100(genreID int) ([]Track, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token.AccessToken)
 
-	resp, err := c.HTTPClient.Do(req)
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -323,7 +359,7 @@ func (c *Client) GetTop100(genreID int) ([]Track, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token.AccessToken)
 
-	resp, err = c.HTTPClient.Do(req)
+	resp, err = c.doRequest(req)
 	if err != nil {
 		return nil, err
 	}
