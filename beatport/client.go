@@ -8,13 +8,17 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
 	DefaultAPIBaseURL  = "https://api.beatport.com/v4"
 	DefaultAuthBaseURL = "https://api.beatport.com/v4/auth"
+	TokenFile          = "token.json"
+	MaxRetries         = 3
 )
 
 type Client struct {
@@ -32,15 +36,69 @@ func NewClient() (*Client, error) {
 	}
 	return &Client{
 		HTTPClient: &http.Client{
-			Jar: jar,
+			Jar:     jar,
+			Timeout: 30 * time.Second,
 		},
 		BaseURL: DefaultAPIBaseURL,
 		AuthURL: DefaultAuthBaseURL,
 	}, nil
 }
 
+// doRequest performs an HTTP request with exponential backoff retry
+func (c *Client) doRequest(req *http.Request) (*http.Response, error) {
+	var resp *http.Response
+	var err error
+
+	for i := 0; i <= MaxRetries; i++ {
+		if i > 0 {
+			time.Sleep(time.Duration(1<<uint(i)) * time.Second) // 2s, 4s, 8s
+		}
+		resp, err = c.HTTPClient.Do(req)
+		if err == nil && resp.StatusCode < 500 {
+			return resp, nil
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+	}
+	return resp, err
+}
+
+func (c *Client) LoadToken() error {
+	file, err := os.Open(TokenFile)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	var token OAuthToken
+	if err := json.NewDecoder(file).Decode(&token); err != nil {
+		return err
+	}
+	c.Token = &token
+	return nil
+}
+
+func (c *Client) SaveToken() error {
+	if c.Token == nil {
+		return fmt.Errorf("no token to save")
+	}
+	file, err := os.Create(TokenFile)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	return json.NewEncoder(file).Encode(c.Token)
+}
+
 func (c *Client) FetchClientID() error {
-	resp, err := c.HTTPClient.Get(c.BaseURL + "/docs/")
+	req, err := http.NewRequest("GET", c.BaseURL+"/docs/", nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return err
 	}
