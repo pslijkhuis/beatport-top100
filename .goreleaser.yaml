@@ -42,3 +42,12 @@ changelog:
     exclude:
       - '^docs:'
       - '^test:'
+
+release:
+  github:
+    owner: pslijkhuis
+    name: beatport-top100
+  draft: false
+  prerelease: auto
+  mode: replace
+  make_latest: true
