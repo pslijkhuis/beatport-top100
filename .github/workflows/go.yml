@@ -36,6 +36,7 @@ jobs:
       if: always()
       with:
         files: "unit-tests.xml"
+        retention-days: 5
 
   lint:
     runs-on: ubuntu-latest
