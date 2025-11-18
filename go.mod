@@ -1,6 +1,6 @@
 module beatport-top100
 
-go 1.24
+go 1.24.0
 
 require golang.org/x/term v0.37.0
 
