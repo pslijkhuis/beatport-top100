@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -37,6 +38,12 @@ func loadConfig() (*Config, error) {
 }
 
 func main() {
+	var jsonOutput bool
+	var csvOutput bool
+	flag.BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+	flag.BoolVar(&csvOutput, "csv", false, "Output in CSV format")
+	flag.Parse()
+
 	reader := bufio.NewReader(os.Stdin)
 	config, err := loadConfig()
 	if err != nil {
@@ -46,7 +53,10 @@ func main() {
 	var username, password string
 
 	if config != nil && config.Username != "" && config.Password != "" {
-		fmt.Println("Using credentials from config.json")
+		if !jsonOutput && !csvOutput {
+			fmt.Println("Using credentials from config.json")
+		}
+
 		username = config.Username
 		password = config.Password
 	} else {
@@ -110,20 +120,18 @@ func main() {
 	fmt.Println("Fetching genres...")
 	genres, err := client.GetGenres()
 	if err != nil {
-		log.Fatalf("Failed to fetch genres: %v", err)
+		log.Fatalf("Error fetching genres: %v", err)
 	}
 
-	var genreID int
-	found := false
+	var selectedGenre *beatport.Genre
 	for _, g := range genres {
 		if strings.EqualFold(g.Name, genreName) {
-			genreID = g.ID
-			found = true
+			selectedGenre = &g
 			break
 		}
 	}
 
-	if !found {
+	if selectedGenre == nil {
 		fmt.Printf("Genre '%s' not found. Available genres:\n", genreName)
 		for _, g := range genres {
 			fmt.Printf("- %s (ID: %d)\n", g.Name, g.ID)
@@ -131,19 +139,42 @@ func main() {
 		log.Fatalf("Please choose one of the available genres.")
 	}
 
-	fmt.Printf("Fetching Top 100 for %s (ID: %d)...\n", genreName, genreID)
-	tracks, err := client.GetTop100(genreID)
+	if !jsonOutput && !csvOutput {
+		fmt.Printf("Fetching Top 100 for %s (ID: %d)...\n", selectedGenre.Name, selectedGenre.ID)
+	}
+	tracks, err := client.GetTop100(selectedGenre.ID)
 	if err != nil {
-		log.Fatalf("Failed to fetch top 100: %v", err)
+		log.Fatalf("Error fetching Top 100: %v", err)
+	}
+
+	if jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(tracks); err != nil {
+			log.Fatalf("Error encoding JSON: %v", err)
+		}
+		return
+	}
+
+	if csvOutput {
+		// Simple CSV output
+		fmt.Println("Artist,Title,Mix Name")
+		for _, track := range tracks {
+			artistName := ""
+			if len(track.Artists) > 0 {
+				artistName = track.Artists[0].Name
+			}
+			fmt.Printf("%s,%s,%s\n", artistName, track.Name, track.MixName)
+		}
+		return
 	}
 
 	fmt.Println("\nTop 100 Tracks:")
 	for i, track := range tracks {
-		var artists []string
-		for _, a := range track.Artists {
-			artists = append(artists, a.Name)
+		artistName := ""
+		if len(track.Artists) > 0 {
+			artistName = track.Artists[0].Name
 		}
-		artistStr := strings.Join(artists, ", ")
-		fmt.Printf("%d. %s - %s (%s)\n", i+1, artistStr, track.Name, track.MixName)
+		fmt.Printf("%d. %s - %s (%s)\n", i+1, artistName, track.Name, track.MixName)
 	}
 }
